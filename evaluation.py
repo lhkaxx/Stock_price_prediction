@@ -208,7 +208,73 @@ def evaluate(data_dir: str = "data",
     plot_predictions(y_true_real, lstm_pred_real, gru_pred_real, save_dir=save_dir)
     plot_residuals(y_true_real, lstm_pred_real, gru_pred_real, save_dir=save_dir)
 
+    # ---- 6. 导出 JSON（供 Web Dashboard 使用） ----
+    export_json(lstm_metrics, gru_metrics,
+                lstm_history, gru_history,
+                y_true_real, lstm_pred_real, gru_pred_real,
+                save_dir=save_dir)
+
     return lstm_metrics, gru_metrics
+
+
+def export_json(lstm_metrics: dict, gru_metrics: dict,
+                lstm_history: dict, gru_history: dict,
+                y_true: np.ndarray, lstm_pred: np.ndarray, gru_pred: np.ndarray,
+                save_dir: str = "figures"):
+    """
+    导出 metrics.json + 图表数据 JSON，供 Web Dashboard 使用。
+    """
+    import json
+
+    # ---- metrics.json ----
+    metrics_data = {
+        "LSTM": {k: round(float(v), 4) for k, v in lstm_metrics.items()},
+        "GRU": {k: round(float(v), 4) for k, v in gru_metrics.items()},
+        "LSTM_params": 34081,
+        "GRU_params": 25569,
+        "LSTM_best_epoch": int(lstm_history["best_epoch"]),
+        "GRU_best_epoch": int(gru_history["best_epoch"]),
+    }
+    with open(os.path.join(save_dir, "metrics.json"), "w", encoding="utf-8") as f:
+        json.dump(metrics_data, f, ensure_ascii=False, indent=2)
+
+    # ---- chart_history.json (损失曲线) ----
+    history_data = {
+        "lstm_train": [round(float(x), 6) for x in lstm_history["train_losses"]],
+        "lstm_val": [round(float(x), 6) for x in lstm_history["val_losses"]],
+        "gru_train": [round(float(x), 6) for x in gru_history["train_losses"]],
+        "gru_val": [round(float(x), 6) for x in gru_history["val_losses"]],
+        "lstm_best_epoch": int(lstm_history["best_epoch"]),
+        "gru_best_epoch": int(gru_history["best_epoch"]),
+    }
+    with open(os.path.join(save_dir, "chart_history.json"), "w", encoding="utf-8") as f:
+        json.dump(history_data, f, ensure_ascii=False, indent=2)
+
+    # ---- chart_predict.json (预测对比，取最后 200 个点) ----
+    n = min(200, len(y_true))
+    predict_data = {
+        "y_true": [round(float(x), 2) for x in y_true[-n:]],
+        "lstm_pred": [round(float(x), 2) for x in lstm_pred[-n:]],
+        "gru_pred": [round(float(x), 2) for x in gru_pred[-n:]],
+    }
+    with open(os.path.join(save_dir, "chart_predict.json"), "w", encoding="utf-8") as f:
+        json.dump(predict_data, f, ensure_ascii=False, indent=2)
+
+    # ---- chart_residual.json (残差分布) ----
+    lstm_res = (y_true - lstm_pred).tolist()
+    gru_res = (y_true - gru_pred).tolist()
+    residual_data = {
+        "lstm": [round(float(x), 4) for x in lstm_res],
+        "gru": [round(float(x), 4) for x in gru_res],
+        "lstm_mean": round(float(np.mean(lstm_res)), 4),
+        "lstm_std": round(float(np.std(lstm_res)), 4),
+        "gru_mean": round(float(np.mean(gru_res)), 4),
+        "gru_std": round(float(np.std(gru_res)), 4),
+    }
+    with open(os.path.join(save_dir, "chart_residual.json"), "w", encoding="utf-8") as f:
+        json.dump(residual_data, f, ensure_ascii=False, indent=2)
+
+    print(f"[evaluation] JSON 数据已导出至 {save_dir}/ (4 个文件)")
 
 
 if __name__ == "__main__":
