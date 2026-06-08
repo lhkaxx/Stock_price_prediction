@@ -215,7 +215,7 @@
 
   <!-- ===== 历史 K 线图 ===== -->
   <div class="chart-card">
-    <div class="chart-title">最近 60 个交易日 K 线图</div>
+    <div class="chart-title">K 线图（近 60 天真实 + 15 天预测）</div>
     <div class="chart-box" id="chart-kline"></div>
   </div>
 
@@ -397,39 +397,35 @@ const GOLD_COLOR = '#f0b444';
   const histDates = forecast.history_dates;
   const futDates  = forecast.dates;
   const allDates  = [...histDates, ...futDates];
+  const histLen   = histDates.length;
 
-  const histLen = histDates.length;
-
-  // 历史真实 K 线（预测段 null）
-  const histCandle = forecast.history_ohlc.map(function(item, idx) {
-    return { value: item, name: histDates[idx] };
+  // ---- 合成单一 OHLC 数组：历史真实 + 预测（GRU 表现更优） ----
+  const allCandle = forecast.history_ohlc.map(function(v) {
+    return [v[0], v[1], v[2], v[3]];
   });
-  const histOnly = histCandle.concat(new Array(futDates.length).fill(null));
-
-  // 预测合成 K 线：Open=前日Close, Close=预测值, Low/High=min/max
-  function buildPredCandles(preds, prevClose) {
-    const result = [];
-    let prev = prevClose;
-    for (let i = 0; i < preds.length; i++) {
-      const c = preds[i], o = prev;
-      result.push({ value: [o, c, Math.min(o,c), Math.max(o,c)], name: futDates[i] });
-      prev = c;
-    }
-    return result;
+  // 追加 15 天预测 K 线
+  let prev = forecast.last_close;
+  for (let i = 0; i < forecast.gru.length; i++) {
+    const c = forecast.gru[i];
+    const o = prev;
+    allCandle.push([o, c, Math.min(o,c), Math.max(o,c)]);
+    prev = c;
   }
 
-  const lstmPred = new Array(histLen).fill(null).concat(buildPredCandles(forecast.lstm, forecast.last_close));
-  const gruPred  = new Array(histLen).fill(null).concat(buildPredCandles(forecast.gru, forecast.last_close));
-
-  // 均线（仅历史，预测段 null）
-  function calcMA(data, w) {
+  // 均线（仅历史数据计算，预测段 null 补齐）
+  function calcMA(raw, w) {
     const r = [];
-    for (let i = 0; i < data.length; i++) {
+    for (let i = 0; i < raw.length; i++) {
       if (i < w - 1) r.push(null);
-      else { let s = 0; for (let j = 0; j < w; j++) s += data[i-j][1]; r.push(+(s / w).toFixed(2)); }
+      else { let s = 0; for (let j = 0; j < w; j++) s += raw[i-j][1]; r.push(+(s / w).toFixed(2)); }
     }
-    return r.concat(new Array(futDates.length).fill(null));
+    while (r.length < allDates.length) r.push(null);
+    return r;
   }
+
+  // 标记每根 K 线是否为预测（用于 tooltip + 视觉区分）
+  const isPredFlags = [];
+  for (let i = 0; i < allDates.length; i++) isPredFlags.push(i >= histLen);
 
   chart.setOption({
     backgroundColor: 'transparent',
@@ -441,14 +437,13 @@ const GOLD_COLOR = '#f0b444';
       borderColor: GRID_COLOR,
       textStyle: { color: '#c8ccd4', fontSize: 12 },
       formatter: function(params) {
-        const cs = params.find(p => p.value != null && Array.isArray(p.value));
-        if (!cs) return '';
-        const v = cs.value;
-        const isPred = cs.seriesName.indexOf('预测') >= 0;
-        const clr = cs.seriesName === 'LSTM 预测' ? LSTM_COLOR :
-                     cs.seriesName === 'GRU 预测' ? GRU_COLOR :
-                     (v[1] >= v[0] ? '#ef5350' : '#26a69a');
-        let html = '<strong>' + cs.axisValue + '</strong>';
+        const d = params.find(p => p.value != null && Array.isArray(p.value));
+        if (!d) return '';
+        const v = d.value;
+        const idx = d.dataIndex;
+        const isPred = isPredFlags[idx];
+        const clr = isPred ? GRU_COLOR : (v[1] >= v[0] ? '#ef5350' : '#26a69a');
+        let html = '<strong>' + d.axisValue + '</strong>';
         if (isPred) html += ' <span style="font-size:10px;color:' + GOLD_COLOR + '">[预测]</span>';
         html += '<br/><table style="border-collapse:collapse;font-size:12px">';
         html += '<tr><td>开盘</td><td style="padding-left:16px;text-align:right;font-weight:600">' + v[0].toFixed(2) + '</td></tr>';
@@ -465,7 +460,7 @@ const GOLD_COLOR = '#f0b444';
         return html;
       }
     },
-    legend: { data: ['K线','LSTM 预测','GRU 预测','MA5','MA10','MA20'], textStyle: { color: TEXT_COLOR }, top: 6 },
+    legend: { data: ['K线（含预测）','MA5','MA10','MA20'], textStyle: { color: TEXT_COLOR }, top: 6 },
     grid: { top: 50, right: 30, bottom: 40, left: 60 },
     toolbox: { feature: { saveAsImage: { title: '保存' } }, right: 20, top: 2, iconStyle: { borderColor: TEXT_COLOR } },
     xAxis: {
@@ -478,17 +473,11 @@ const GOLD_COLOR = '#f0b444';
       scale: true, splitLine: { lineStyle: { color: GRID_COLOR } }, axisLabel: { color: TEXT_COLOR }
     },
     series: [
-      { name: 'K线', type: 'candlestick', data: histOnly,
+      { name: 'K线（含预测）', type: 'candlestick', data: allCandle,
         itemStyle: { color: '#ef5350', color0: '#26a69a', borderColor: '#ef5350', borderColor0: '#26a69a' } },
-      { name: 'LSTM 预测', type: 'candlestick', data: lstmPred,
-        itemStyle: { color: LSTM_COLOR, color0: LSTM_COLOR, borderColor: LSTM_COLOR, borderColor0: LSTM_COLOR, opacity: 0.55 },
-        barWidth: '36%' },
-      { name: 'GRU 预测', type: 'candlestick', data: gruPred,
-        itemStyle: { color: GRU_COLOR, color0: GRU_COLOR, borderColor: GRU_COLOR, borderColor0: GRU_COLOR, opacity: 0.55 },
-        barWidth: '36%' },
-      { name: 'MA5',  type: 'line', data: calcMA(forecast.history_ohlc, 5),  smooth: true, symbol: 'none', lineStyle: { color: '#f5a623', width: 1, opacity: 0.8 } },
-      { name: 'MA10', type: 'line', data: calcMA(forecast.history_ohlc, 10), smooth: true, symbol: 'none', lineStyle: { color: '#4a90d9', width: 1, opacity: 0.8 } },
-      { name: 'MA20', type: 'line', data: calcMA(forecast.history_ohlc, 20), smooth: true, symbol: 'none', lineStyle: { color: '#e0556a', width: 1, opacity: 0.8 } },
+      { name: 'MA5',  type: 'line', data: calcMA(allCandle, 5),  smooth: true, symbol: 'none', lineStyle: { color: '#f5a623', width: 1, opacity: 0.8 } },
+      { name: 'MA10', type: 'line', data: calcMA(allCandle, 10), smooth: true, symbol: 'none', lineStyle: { color: '#4a90d9', width: 1, opacity: 0.8 } },
+      { name: 'MA20', type: 'line', data: calcMA(allCandle, 20), smooth: true, symbol: 'none', lineStyle: { color: '#e0556a', width: 1, opacity: 0.8 } },
       { name: '分隔', type: 'line', data: [], markLine: {
           silent: true, symbol: 'none',
           lineStyle: { color: GOLD_COLOR, type: 'dashed', width: 1, opacity: 0.7 },
