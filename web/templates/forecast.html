@@ -389,33 +389,47 @@ const GOLD_COLOR = '#f0b444';
   window.addEventListener('resize', () => chart.resize());
 })();
 
-// ===== K 线图 =====
+// ===== K 线图（历史真实 + 预测合成） =====
 (function(){
   const dom = document.getElementById('chart-kline');
   const chart = echarts.init(dom, 'dark');
 
-  const ohlcData = forecast.history_ohlc.map(function(item, idx) {
-    return {
-      value: item,
-      name: forecast.history_dates[idx]
-    };
-  });
+  const histDates = forecast.history_dates;
+  const futDates  = forecast.dates;
+  const allDates  = [...histDates, ...futDates];
 
-  function calcMA(data, window) {
+  const histLen = histDates.length;
+
+  // 历史真实 K 线（预测段 null）
+  const histCandle = forecast.history_ohlc.map(function(item, idx) {
+    return { value: item, name: histDates[idx] };
+  });
+  const histOnly = histCandle.concat(new Array(futDates.length).fill(null));
+
+  // 预测合成 K 线：Open=前日Close, Close=预测值, Low/High=min/max
+  function buildPredCandles(preds, prevClose) {
     const result = [];
-    for (let i = 0; i < data.length; i++) {
-      if (i < window - 1) {
-        result.push(null);
-      } else {
-        let sum = 0;
-        for (let j = 0; j < window; j++) sum += data[i - j][1];
-        result.push(+(sum / window).toFixed(2));
-      }
+    let prev = prevClose;
+    for (let i = 0; i < preds.length; i++) {
+      const c = preds[i], o = prev;
+      result.push({ value: [o, c, Math.min(o,c), Math.max(o,c)], name: futDates[i] });
+      prev = c;
     }
     return result;
   }
 
-  const dates = forecast.history_dates;
+  const lstmPred = new Array(histLen).fill(null).concat(buildPredCandles(forecast.lstm, forecast.last_close));
+  const gruPred  = new Array(histLen).fill(null).concat(buildPredCandles(forecast.gru, forecast.last_close));
+
+  // 均线（仅历史，预测段 null）
+  function calcMA(data, w) {
+    const r = [];
+    for (let i = 0; i < data.length; i++) {
+      if (i < w - 1) r.push(null);
+      else { let s = 0; for (let j = 0; j < w; j++) s += data[i-j][1]; r.push(+(s / w).toFixed(2)); }
+    }
+    return r.concat(new Array(futDates.length).fill(null));
+  }
 
   chart.setOption({
     backgroundColor: 'transparent',
@@ -427,101 +441,65 @@ const GOLD_COLOR = '#f0b444';
       borderColor: GRID_COLOR,
       textStyle: { color: '#c8ccd4', fontSize: 12 },
       formatter: function(params) {
-        const d = params[0];
-        if (!d || !d.data || d.data.value == null) return '';
-        const v = d.data.value;
-        const up = v[1] >= v[0];
-        const color = up ? '#ef5350' : '#26a69a';
-        let html = '<strong>' + d.name + '</strong><br/>';
-        html += '<table style="border-collapse:collapse;font-size:12px">';
+        const cs = params.find(p => p.value != null && Array.isArray(p.value));
+        if (!cs) return '';
+        const v = cs.value;
+        const isPred = cs.seriesName.indexOf('预测') >= 0;
+        const clr = cs.seriesName === 'LSTM 预测' ? LSTM_COLOR :
+                     cs.seriesName === 'GRU 预测' ? GRU_COLOR :
+                     (v[1] >= v[0] ? '#ef5350' : '#26a69a');
+        let html = '<strong>' + cs.axisValue + '</strong>';
+        if (isPred) html += ' <span style="font-size:10px;color:' + GOLD_COLOR + '">[预测]</span>';
+        html += '<br/><table style="border-collapse:collapse;font-size:12px">';
         html += '<tr><td>开盘</td><td style="padding-left:16px;text-align:right;font-weight:600">' + v[0].toFixed(2) + '</td></tr>';
-        html += '<tr><td>收盘</td><td style="padding-left:16px;text-align:right;font-weight:600;color:' + color + '">' + v[1].toFixed(2) + '</td></tr>';
+        html += '<tr><td>收盘</td><td style="padding-left:16px;text-align:right;font-weight:600;color:' + clr + '">' + v[1].toFixed(2) + '</td></tr>';
         html += '<tr><td>最低</td><td style="padding-left:16px;text-align:right">' + v[2].toFixed(2) + '</td></tr>';
         html += '<tr><td>最高</td><td style="padding-left:16px;text-align:right">' + v[3].toFixed(2) + '</td></tr>';
-        for (let i = 1; i < params.length; i++) {
-          if (params[i].value != null) {
-            html += '<tr><td>' + params[i].seriesName + '</td><td style="padding-left:16px;text-align:right;color:' + params[i].color + '">' + params[i].value.toFixed(2) + '</td></tr>';
-          }
+        html += '<tr><td>涨跌</td><td style="padding-left:16px;text-align:right;color:' + clr + '">' + ((v[1]-v[0])/v[0]*100).toFixed(2) + '%</td></tr>';
+        for (let i = 0; i < params.length; i++) {
+          const p = params[i];
+          if (p.seriesName.indexOf('MA') >= 0 && p.value != null)
+            html += '<tr><td>' + p.seriesName + '</td><td style="padding-left:16px;text-align:right;color:' + p.color + '">' + p.value.toFixed(2) + '</td></tr>';
         }
-        html += '<tr><td>涨跌</td><td style="padding-left:16px;text-align:right;color:' + color + '">' + ((v[1] - v[0]) / v[0] * 100).toFixed(2) + '%</td></tr>';
         html += '</table>';
         return html;
       }
     },
+    legend: { data: ['K线','LSTM 预测','GRU 预测','MA5','MA10','MA20'], textStyle: { color: TEXT_COLOR }, top: 6 },
     grid: { top: 50, right: 30, bottom: 40, left: 60 },
-    toolbox: {
-      feature: { saveAsImage: { title: '保存' } },
-      right: 20, top: 2,
-      iconStyle: { borderColor: TEXT_COLOR }
-    },
+    toolbox: { feature: { saveAsImage: { title: '保存' } }, right: 20, top: 2, iconStyle: { borderColor: TEXT_COLOR } },
     xAxis: {
-      type: 'category',
-      data: dates,
+      type: 'category', data: allDates,
       axisLine: { lineStyle: { color: GRID_COLOR } },
-      axisLabel: {
-        color: TEXT_COLOR,
-        interval: Math.floor(dates.length / 8),
-        rotate: 30,
-        fontSize: 11
-      }
+      axisLabel: { color: TEXT_COLOR, interval: Math.floor(allDates.length / 10), rotate: 30, fontSize: 11 }
     },
     yAxis: {
-      type: 'value',
-      name: '价格 (¥)',
-      nameTextStyle: { color: TEXT_COLOR },
-      scale: true,
-      splitLine: { lineStyle: { color: GRID_COLOR } },
-      axisLabel: { color: TEXT_COLOR }
+      type: 'value', name: '价格 (¥)', nameTextStyle: { color: TEXT_COLOR },
+      scale: true, splitLine: { lineStyle: { color: GRID_COLOR } }, axisLabel: { color: TEXT_COLOR }
     },
     series: [
-      {
-        name: 'K线',
-        type: 'candlestick',
-        data: ohlcData,
-        itemStyle: {
-          color: '#ef5350',
-          color0: '#26a69a',
-          borderColor: '#ef5350',
-          borderColor0: '#26a69a'
-        },
-        markLine: {
-          silent: true,
-          symbol: 'none',
+      { name: 'K线', type: 'candlestick', data: histOnly,
+        itemStyle: { color: '#ef5350', color0: '#26a69a', borderColor: '#ef5350', borderColor0: '#26a69a' } },
+      { name: 'LSTM 预测', type: 'candlestick', data: lstmPred,
+        itemStyle: { color: LSTM_COLOR, color0: LSTM_COLOR, borderColor: LSTM_COLOR, borderColor0: LSTM_COLOR, opacity: 0.55 },
+        barWidth: '36%' },
+      { name: 'GRU 预测', type: 'candlestick', data: gruPred,
+        itemStyle: { color: GRU_COLOR, color0: GRU_COLOR, borderColor: GRU_COLOR, borderColor0: GRU_COLOR, opacity: 0.55 },
+        barWidth: '36%' },
+      { name: 'MA5',  type: 'line', data: calcMA(forecast.history_ohlc, 5),  smooth: true, symbol: 'none', lineStyle: { color: '#f5a623', width: 1, opacity: 0.8 } },
+      { name: 'MA10', type: 'line', data: calcMA(forecast.history_ohlc, 10), smooth: true, symbol: 'none', lineStyle: { color: '#4a90d9', width: 1, opacity: 0.8 } },
+      { name: 'MA20', type: 'line', data: calcMA(forecast.history_ohlc, 20), smooth: true, symbol: 'none', lineStyle: { color: '#e0556a', width: 1, opacity: 0.8 } },
+      { name: '分隔', type: 'line', data: [], markLine: {
+          silent: true, symbol: 'none',
           lineStyle: { color: GOLD_COLOR, type: 'dashed', width: 1, opacity: 0.7 },
-          label: { formatter: '最后交易日', color: GOLD_COLOR, fontSize: 11 },
-          data: [{ xAxis: dates[dates.length - 1] }]
-        }
-      },
-      {
-        name: 'MA5',
-        type: 'line',
-        data: calcMA(forecast.history_ohlc, 5),
-        smooth: true,
-        symbol: 'none',
-        lineStyle: { color: '#f5a623', width: 1, opacity: 0.8 }
-      },
-      {
-        name: 'MA10',
-        type: 'line',
-        data: calcMA(forecast.history_ohlc, 10),
-        smooth: true,
-        symbol: 'none',
-        lineStyle: { color: '#4a90d9', width: 1, opacity: 0.8 }
-      },
-      {
-        name: 'MA20',
-        type: 'line',
-        data: calcMA(forecast.history_ohlc, 20),
-        smooth: true,
-        symbol: 'none',
-        lineStyle: { color: '#e0556a', width: 1, opacity: 0.8 }
-      }
+          label: { formatter: '← 历史 | 预测 →', color: GOLD_COLOR, fontSize: 11 },
+          data: [{ xAxis: histDates[histDates.length - 1] }]
+      } }
     ],
     dataZoom: [
-      { type: 'inside', start: 0, end: 100 },
-      { type: 'slider', start: 0, end: 100, height: 24, bottom: 6,
-        borderColor: GRID_COLOR, backgroundColor: '#1a1d27',
-        fillerColor: 'rgba(74,144,217,0.15)' }
+      { type: 'inside', start: 55, end: 100 },
+      { type: 'slider', start: 55, end: 100, height: 24, bottom: 6,
+        borderColor: GRID_COLOR, backgroundColor: '#1a1d27', fillerColor: 'rgba(74,144,217,0.15)' }
     ]
   });
 

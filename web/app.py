@@ -76,4 +76,6 @@ if __name__ == "__main__":
     print(f"[Flask] 项目根目录: {PROJECT_ROOT}")
     print(f"[Flask] 数据目录:   {FIGURES_DIR}")
     print(f"[Flask] 启动地址:   http://127.0.0.1:5000")
+    print(f"[Flask] 启动地址:   http://127.0.0.1:5000/forecast")
+
     app.run(debug=True, host="127.0.0.1", port=5000)
