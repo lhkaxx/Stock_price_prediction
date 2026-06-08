@@ -2,8 +2,12 @@
 evaluation.py — 评估指标计算 + 对比可视化
 对 LSTM 和 GRU 模型在测试集上计算 MSE/RMSE/MAE/MAPE/R²，生成对比图表
 """
+import json
 import os
+import pickle
+
 import numpy as np
+import pandas as pd
 import torch
 import matplotlib
 matplotlib.use("Agg")  # 非交互后端，兼容无 GUI 环境
@@ -279,3 +283,146 @@ def export_json(lstm_metrics: dict, gru_metrics: dict,
 
 if __name__ == "__main__":
     evaluate()
+
+
+# ==================== 未来预测 ====================
+
+def forecast_future(model, X_last: np.ndarray, close_mean: float, close_std: float,
+                    steps: int = 15) -> list:
+    """
+    自回归滚动预测未来 N 天。
+
+    工作原理：
+    1. 用最后 30 天真实特征窗口预测第 T+1 天收盘价
+    2. 将预测值填入 Close 列（索引 3），其余特征沿用上一天的值
+    3. 窗口向前滑动 1 天，重复预测，共 steps 步
+
+    Args:
+        model: 训练好的 PyTorch 模型（LSTM 或 GRU）
+        X_last: shape (30, 17) 最后 30 天标准化特征
+        close_mean/close_std: 反标准化参数
+        steps: 预测天数
+
+    Returns:
+        list[float]: 反标准化后的预测收盘价
+    """
+    device = next(model.parameters()).device
+    model.eval()
+
+    window = X_last.copy()  # (30, 17)
+    predictions_scaled = []
+
+    with torch.no_grad():
+        for _ in range(steps):
+            inp = torch.tensor(window, dtype=torch.float32).unsqueeze(0).to(device)
+            pred = model(inp).item()
+            predictions_scaled.append(pred)
+
+            # 构造下一时间步的特征窗口（滑动 + 用预测值替换 Close）
+            new_row = window[-1].copy()
+            new_row[3] = pred  # Close 在列索引 3
+            window = np.vstack([window[1:], new_row])
+
+    return [p * close_std + close_mean for p in predictions_scaled]
+
+
+def export_forecast_json(data_dir: str = "data",
+                         model_dir: str = "models",
+                         save_dir: str = "figures"):
+    """
+    生成未来 15 天预测 JSON，供 Web 前端使用。
+
+    流程：
+    1. 加载原始数据 + 构建特征 → 取最后 30 天标准化特征
+    2. 加载 LSTM / GRU 最优模型
+    3. 自回归预测 15 天
+    4. 导出 forecast.json
+    """
+    from feature_engineering import build_features, FEATURE_COLUMNS
+    from model_lstm import LSTMModel
+    from model_gru import GRUModel
+
+    # ---- 1. 加载数据并构建特征 ----
+    csv_path = os.path.join(data_dir, "600519_daily.csv")
+    if not os.path.exists(csv_path):
+        print(f"[forecast] 错误: 数据文件不存在 {csv_path}")
+        return None
+
+    df = pd.read_csv(csv_path, parse_dates=["Date"])
+    df = build_features(df)
+    df = df.dropna().reset_index(drop=True)
+
+    feature_data = df[FEATURE_COLUMNS].values.astype(np.float64)
+
+    # ---- 2. 加载 Scaler ----
+    with open(os.path.join(model_dir, "scaler.pkl"), "rb") as f:
+        scaler = pickle.load(f)
+
+    # 取最后 30 天真实特征 + 标准化
+    X_last = scaler.transform(feature_data[-30:])  # (30, 17)
+
+    # 反标准化参数
+    close_mean = float(scaler.mean_[3])
+    close_std = float(scaler.scale_[3])
+
+    # 历史收盘价（最近 60 天真实价格，供图表展示）
+    history_close = [round(float(x), 2) for x in df["Close"].values[-60:]]
+    history_dates = df["Date"].dt.strftime("%Y-%m-%d").values[-60:].tolist()
+
+    # ---- 3. 加载模型 ----
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    input_size = len(FEATURE_COLUMNS)  # 18
+
+    lstm = LSTMModel(input_size=input_size)
+    lstm_path = os.path.join(model_dir, "lstm_best.pt")
+    if not os.path.exists(lstm_path):
+        print(f"[forecast] 错误: 模型文件不存在 {lstm_path}")
+        return None
+    lstm.load_state_dict(torch.load(lstm_path, map_location=device))
+    lstm.to(device)
+    lstm.eval()
+
+    gru = GRUModel(input_size=input_size)
+    gru_path = os.path.join(model_dir, "gru_best.pt")
+    if not os.path.exists(gru_path):
+        print(f"[forecast] 错误: 模型文件不存在 {gru_path}")
+        return None
+    gru.load_state_dict(torch.load(gru_path, map_location=device))
+    gru.to(device)
+    gru.eval()
+
+    # ---- 4. 自回归预测 ----
+    lstm_pred = forecast_future(lstm, X_last, close_mean, close_std, steps=15)
+    gru_pred = forecast_future(gru, X_last, close_mean, close_std, steps=15)
+
+    # ---- 5. 生成未来日期（跳过周末） ----
+    last_date = df["Date"].iloc[-1]
+    future_dates = []
+    current = last_date
+    while len(future_dates) < 15:
+        current = current + pd.Timedelta(days=1)
+        if current.weekday() < 5:  # 周一至周五
+            future_dates.append(current.strftime("%Y-%m-%d"))
+
+    # ---- 6. 导出 JSON ----
+    forecast = {
+        "lstm": [round(float(x), 2) for x in lstm_pred],
+        "gru": [round(float(x), 2) for x in gru_pred],
+        "dates": future_dates,
+        "history_close": history_close,
+        "history_dates": history_dates,
+        "last_close": round(float(df["Close"].iloc[-1]), 2),
+        "last_date": df["Date"].iloc[-1].strftime("%Y-%m-%d"),
+    }
+
+    os.makedirs(save_dir, exist_ok=True)
+    out_path = os.path.join(save_dir, "forecast.json")
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(forecast, f, ensure_ascii=False, indent=2)
+
+    print(f"[forecast] 未来 15 天预测已导出至 {out_path}")
+    print(f"[forecast] LSTM 预测范围: {lstm_pred[0]:.2f} ~ {lstm_pred[-1]:.2f}")
+    print(f"[forecast] GRU  预测范围: {gru_pred[0]:.2f} ~ {gru_pred[-1]:.2f}")
+
+    return forecast

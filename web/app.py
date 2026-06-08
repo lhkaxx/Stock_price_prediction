@@ -60,6 +60,18 @@ def api_residual():
     return jsonify(load_json("chart_residual.json"))
 
 
+@app.route("/forecast")
+def forecast():
+    """未来预测页面"""
+    forecast_data = load_json("forecast.json")
+    return render_template("forecast.html", forecast=forecast_data)
+
+
+@app.route("/api/forecast")
+def api_forecast():
+    return jsonify(load_json("forecast.json"))
+
+
 if __name__ == "__main__":
     print(f"[Flask] 项目根目录: {PROJECT_ROOT}")
     print(f"[Flask] 数据目录:   {FIGURES_DIR}")

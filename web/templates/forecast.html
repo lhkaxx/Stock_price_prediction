@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>未来 15 天股价预测 — LSTM vs GRU</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+<style>
+  :root {
+    --bg: #0f1117;
+    --card: #1a1d27;
+    --border: #2a2d3a;
+    --text: #c8ccd4;
+    --dim: #7a7f8a;
+    --lstm: #4a90d9;
+    --gru: #e0556a;
+    --green: #34c77b;
+    --gold: #f0b444;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Microsoft YaHei", sans-serif;
+    line-height: 1.6;
+    min-height: 100vh;
+  }
+
+  /* ---- Header ---- */
+  .header {
+    background: linear-gradient(135deg, #1a1d2e 0%, #1e2240 100%);
+    border-bottom: 1px solid var(--border);
+    padding: 28px 40px 24px;
+    text-align: center;
+  }
+  .header h1 {
+    font-size: 28px;
+    font-weight: 700;
+    background: linear-gradient(135deg, var(--lstm), var(--gru));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    margin-bottom: 6px;
+  }
+  .header .subtitle {
+    color: var(--dim);
+    font-size: 14px;
+  }
+  .header .nav {
+    margin-top: 12px;
+  }
+  .header .nav a {
+    color: var(--dim);
+    text-decoration: none;
+    font-size: 13px;
+    padding: 4px 12px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    transition: all 0.2s;
+  }
+  .header .nav a:hover {
+    color: var(--text);
+    border-color: var(--text);
+  }
+
+  /* ---- Container ---- */
+  .container { max-width: 1400px; margin: 0 auto; padding: 32px 40px; }
+
+  /* ---- Stat Cards ---- */
+  .stat-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+    margin-bottom: 28px;
+  }
+  .stat-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px 24px;
+    text-align: center;
+  }
+  .stat-card .label { color: var(--dim); font-size: 13px; margin-bottom: 6px; }
+  .stat-card .value { font-size: 28px; font-weight: 700; }
+  .stat-card .unit  { font-size: 13px; color: var(--dim); margin-left: 4px; }
+  .stat-card.lstm .value { color: var(--lstm); }
+  .stat-card.gru  .value { color: var(--gru); }
+  .stat-card.info .value { color: var(--gold); font-size: 20px; }
+
+  /* ---- Chart ---- */
+  .chart-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px;
+    margin-bottom: 28px;
+  }
+  .chart-card .chart-title {
+    font-size: 16px;
+    font-weight: 600;
+    margin-bottom: 8px;
+  }
+  .chart-box { width: 100%; height: 460px; }
+
+  /* ---- Table ---- */
+  .section-title {
+    font-size: 18px;
+    font-weight: 600;
+    margin-bottom: 16px;
+    padding-left: 12px;
+    border-left: 3px solid var(--lstm);
+  }
+  .forecast-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 32px;
+    background: var(--card);
+    border-radius: 10px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+  }
+  .forecast-table th, .forecast-table td {
+    padding: 12px 20px;
+    text-align: center;
+    font-size: 14px;
+  }
+  .forecast-table th {
+    background: #1e2240;
+    color: var(--dim);
+    font-weight: 500;
+    font-size: 13px;
+  }
+  .forecast-table td { border-top: 1px solid var(--border); }
+  .forecast-table .date-col { text-align: left; font-weight: 600; }
+  .forecast-table .lstm-col { color: var(--lstm); font-weight: 600; }
+  .forecast-table .gru-col  { color: var(--gru);  font-weight: 600; }
+
+  /* ---- Method Card ---- */
+  .method-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 24px;
+    margin-bottom: 28px;
+  }
+  .method-card h3 {
+    font-size: 16px;
+    margin-bottom: 12px;
+    color: var(--gold);
+  }
+  .method-card p, .method-card li {
+    font-size: 13px;
+    color: var(--dim);
+    line-height: 1.8;
+  }
+  .method-card ol { padding-left: 20px; }
+  .method-card .warning {
+    margin-top: 12px;
+    padding: 10px 14px;
+    background: rgba(240,180,68,0.08);
+    border-left: 3px solid var(--gold);
+    border-radius: 0 6px 6px 0;
+    font-size: 12px;
+  }
+
+  /* ---- Footer ---- */
+  .footer {
+    text-align: center;
+    color: var(--dim);
+    font-size: 12px;
+    padding: 0 0 40px;
+  }
+
+  /* ---- Responsive ---- */
+  @media (max-width: 900px) {
+    .stat-grid { grid-template-columns: repeat(2, 1fr); }
+    .container { padding: 16px; }
+  }
+  @media (max-width: 600px) {
+    .stat-grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>未来 15 天股价预测 — LSTM vs GRU</h1>
+  <p class="subtitle">贵州茅台 (600519) &nbsp;|&nbsp; 基于最后 30 天真实数据 &nbsp;|&nbsp; 自回归滚动预测</p>
+  <div class="nav">
+    <a href="/">← 返回评估 Dashboard</a>
+  </div>
+</div>
+
+<div class="container">
+
+  <!-- ===== 概览卡片 ===== -->
+  <div class="stat-grid">
+    <div class="stat-card info">
+      <div class="label">基准收盘价</div>
+      <div class="value">{{ forecast.last_close }}<span class="unit">¥</span></div>
+    </div>
+    <div class="stat-card info">
+      <div class="label">最后数据日期</div>
+      <div class="value" style="font-size:18px">{{ forecast.last_date }}</div>
+    </div>
+    <div class="stat-card lstm">
+      <div class="label">LSTM 第 15 天预测</div>
+      <div class="value">{{ forecast.lstm[14] }}<span class="unit">¥</span></div>
+    </div>
+    <div class="stat-card gru">
+      <div class="label">GRU 第 15 天预测</div>
+      <div class="value">{{ forecast.gru[14] }}<span class="unit">¥</span></div>
+    </div>
+  </div>
+
+  <!-- ===== 预测折线图 ===== -->
+  <div class="chart-card">
+    <div class="chart-title">历史走势 + 未来 15 天预测</div>
+    <div class="chart-box" id="chart-forecast"></div>
+  </div>
+
+  <!-- ===== 预测数值表 ===== -->
+  <div class="section-title">逐日预测数值</div>
+  <table class="forecast-table">
+    <thead>
+      <tr>
+        <th style="text-align:left">日期</th>
+        <th>LSTM 预测 (¥)</th>
+        <th>GRU 预测 (¥)</th>
+        <th>差值</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for i in range(15) %}
+      <tr>
+        <td class="date-col">{{ forecast.dates[i] }}</td>
+        <td class="lstm-col">{{ forecast.lstm[i] }}</td>
+        <td class="gru-col">{{ forecast.gru[i] }}</td>
+        <td style="color:var(--dim)">{{ "%.2f" | format(forecast.lstm[i] - forecast.gru[i]) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <!-- ===== 方法说明 ===== -->
+  <div class="method-card">
+    <h3>📖 预测方法说明</h3>
+    <p>本预测采用<strong>自回归滚动预测（Auto-Regressive Rolling Forecast）</strong>方法：</p>
+    <ol>
+      <li><strong>起点：</strong>取最近 30 个交易日的全部 18 维特征（价格 + 技术指标）作为输入窗口。</li>
+      <li><strong>第一步预测：</strong>模型根据这 30 天窗口预测第 31 天的收盘价。</li>
+      <li><strong>滚动递推：</strong>将预测值写入窗口的 Close 列，窗口向前滑动 1 天，其余特征沿用上一天数值，再次预测下一天。</li>
+      <li><strong>重复 15 次：</strong>得到未来 15 天的预测收盘价。</li>
+    </ol>
+    <div class="warning">
+      ⚠️ <strong>风险提示：</strong>自回归预测会累积误差，预测步长越长不确定性越大。且非价格特征（技术指标等）沿用上一天的近似处理会引入额外偏差。本预测结果<strong>仅供参考</strong>，不构成任何投资建议。
+    </div>
+  </div>
+
+  <div class="footer">
+    由股票价格预测流水线生成 &nbsp;|&nbsp; 框架: PyTorch &nbsp;|&nbsp; 图表: ECharts
+  </div>
+</div>
+
+<!-- ==================== ECharts ==================== -->
+<script>
+const forecast = {{ forecast | tojson }};
+
+const LSTM_COLOR = '#4a90d9';
+const GRU_COLOR  = '#e0556a';
+const TRUE_COLOR = '#c8ccd4';
+const GRID_COLOR = '#2a2d3a';
+const TEXT_COLOR = '#7a7f8a';
+const GOLD_COLOR = '#f0b444';
+
+(function(){
+  const dom = document.getElementById('chart-forecast');
+  const chart = echarts.init(dom, 'dark');
+
+  // 构建 X 轴：历史日期 + 预测日期
+  const allDates = [...forecast.history_dates, ...forecast.dates];
+
+  // 历史真实收盘价 (Y 轴) + 末尾补 null 对齐预测长度
+  const historyValues = [...forecast.history_close];
+  // 在预测区域历史线置空，仅保留衔接点
+  const historyLine = [...forecast.history_close];
+  // 最后一天真实值同时是预测起点
+
+  // LSTM / GRU 预测值：历史区域为 null，预测区域为真实值
+  const lstmLine = new Array(forecast.history_close.length).fill(null).concat(forecast.lstm);
+  const gruLine  = new Array(forecast.history_close.length).fill(null).concat(forecast.gru);
+
+  // 衔接点：在历史最后一天和预测第一天之间用虚线连接
+  const lastIdx = forecast.history_close.length - 1;
+
+  // 让预测曲线从历史最后一天开始衔接
+  lstmLine[lastIdx] = forecast.history_close[lastIdx];
+  gruLine[lastIdx]  = forecast.history_close[lastIdx];
+
+  chart.setOption({
+    backgroundColor: 'transparent',
+    textStyle: { color: TEXT_COLOR },
+    tooltip: {
+      trigger: 'axis',
+      backgroundColor: '#1a1d27',
+      borderColor: GRID_COLOR,
+      textStyle: { color: '#c8ccd4' },
+      formatter: function(params) {
+        let html = '<strong>' + params[0].axisValue + '</strong><br/>';
+        params.forEach(function(p) {
+          if (p.value !== null && p.value !== undefined) {
+            html += '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:' +
+                    p.color + ';margin-right:6px;"></span>' +
+                    p.seriesName + ': <strong>' + p.value.toFixed(2) + '</strong><br/>';
+          }
+        });
+        return html;
+      }
+    },
+    legend: {
+      data: ['历史收盘价', 'LSTM 预测', 'GRU 预测'],
+      textStyle: { color: TEXT_COLOR },
+      top: 6
+    },
+    grid: { top: 50, right: 30, bottom: 40, left: 60 },
+    toolbox: {
+      feature: {
+        saveAsImage: { title: '保存' }
+      },
+      right: 20, top: 2,
+      iconStyle: { borderColor: TEXT_COLOR }
+    },
+    xAxis: {
+      type: 'category',
+      data: allDates,
+      axisLine: { lineStyle: { color: GRID_COLOR } },
+      axisLabel: {
+        color: TEXT_COLOR,
+        interval: Math.floor(allDates.length / 10),
+        rotate: 30,
+        fontSize: 11
+      }
+    },
+    yAxis: {
+      type: 'value',
+      name: '收盘价 (¥)',
+      nameTextStyle: { color: TEXT_COLOR },
+      splitLine: { lineStyle: { color: GRID_COLOR } },
+      axisLabel: { color: TEXT_COLOR }
+    },
+    series: [
+      {
+        name: '历史收盘价',
+        type: 'line',
+        data: historyLine,
+        symbol: 'none',
+        lineStyle: { color: TRUE_COLOR, width: 1.5 },
+        markLine: {
+          silent: true,
+          symbol: 'none',
+          lineStyle: { color: GOLD_COLOR, type: 'dashed', width: 1, opacity: 0.7 },
+          label: { formatter: '← 历史 | 预测 →', color: GOLD_COLOR, fontSize: 11 },
+          data: [{ xAxis: forecast.history_dates[forecast.history_dates.length - 1] }]
+        }
+      },
+      {
+        name: 'LSTM 预测',
+        type: 'line',
+        data: lstmLine,
+        symbol: 'circle',
+        symbolSize: 4,
+        lineStyle: { color: LSTM_COLOR, width: 2, type: 'dashed' },
+        itemStyle: { color: LSTM_COLOR }
+      },
+      {
+        name: 'GRU 预测',
+        type: 'line',
+        data: gruLine,
+        symbol: 'diamond',
+        symbolSize: 4,
+        lineStyle: { color: GRU_COLOR, width: 2, type: 'dashed' },
+        itemStyle: { color: GRU_COLOR }
+      }
+    ],
+    dataZoom: [
+      { type: 'inside', start: 50, end: 100 },
+      { type: 'slider', start: 50, end: 100, height: 24, bottom: 6,
+        borderColor: GRID_COLOR, backgroundColor: '#1a1d27',
+        fillerColor: 'rgba(74,144,217,0.15)' }
+    ]
+  });
+
+  window.addEventListener('resize', () => chart.resize());
+})();
+</script>
+
+</body>
+</html>
