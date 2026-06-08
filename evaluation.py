@@ -365,9 +365,15 @@ def export_forecast_json(data_dir: str = "data",
     close_mean = float(scaler.mean_[3])
     close_std = float(scaler.scale_[3])
 
-    # 历史收盘价（最近 60 天真实价格，供图表展示）
-    history_close = [round(float(x), 2) for x in df["Close"].values[-60:]]
-    history_dates = df["Date"].dt.strftime("%Y-%m-%d").values[-60:].tolist()
+    # 历史 OHLCV（最近 60 天真实数据，供图表展示）
+    tail_df = df.tail(60)
+    history_close = [round(float(x), 2) for x in tail_df["Close"].values]
+    history_dates = tail_df["Date"].dt.strftime("%Y-%m-%d").values.tolist()
+    # ECharts candlestick 格式: [[open, close, low, high], ...]
+    history_ohlc = [
+        [round(float(o), 2), round(float(c), 2), round(float(l), 2), round(float(h), 2)]
+        for o, c, l, h in zip(tail_df["Open"], tail_df["Close"], tail_df["Low"], tail_df["High"])
+    ]
 
     # ---- 3. 加载模型 ----
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -412,6 +418,7 @@ def export_forecast_json(data_dir: str = "data",
         "dates": future_dates,
         "history_close": history_close,
         "history_dates": history_dates,
+        "history_ohlc": history_ohlc,
         "last_close": round(float(df["Close"].iloc[-1]), 2),
         "last_date": df["Date"].iloc[-1].strftime("%Y-%m-%d"),
     }
